@@ -13,10 +13,10 @@ Note: The Maven repository address needs to be configured in both 'buildscript' 
 
 (2) If you are using Gradle for integration, add the following code to your project's build.gradle:
 ```kotlin
-implementation 'dev.deeplink:httpdns:2.0.7'
+implementation 'dev.deeplink:httpdns:3.0.0'
 ```
 
-Step 3: Configure AndroidManifest
+Step 2: Configure AndroidManifest
 
 Find the project configuration file AndroidManifest.xml in your project, and add the following permissions:
 
@@ -24,52 +24,58 @@ Find the project configuration file AndroidManifest.xml in your project, and add
 <uses-permission android:name="android.permission.INTERNET" />
 ```
 
-If you need to add obfuscation during packaging, please add the following code to the obfuscation configuration file:
-```kotlin
--keep class dev.deeplink.httpdns.bean.**{*;}
-```
-
-Step 4: Initialize the SDK
+Step 3: Initialize the SDK
 If your application is in multi-process mode, please initialize the SDK in the main process. Here is the reference code:
 ```kotlin
 class MyApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
-        // If your application is in multi-process mode, please initialize the SDK in the main process.
-        if (baseContext.packageName.equals(packageName)) {
-
-            // Initialize the SDK
-            HttpDNS.init(this)
-        }
+          val config = HttpDNSConfig.Builder().setAccountId("ACCOUNT_ID")
+            .setEnableExpiredIP(true)
+            .setRefreshAfterNetworkChanged(true)
+            .build()
+        val httpDns = DLinkHttpDNS(this, config)
     }
 }
 ```
 
-Step 5: Request the IP corresponding to the domain name
+Step 4: Request the IP corresponding to the domain name
 ```kotlin
-// Asynchronously obtain the IP address of the specified domain name list
-val asyncDomainList =
-    mutableListOf("asyncDomain1.com", "asyncDomain2.com")
-HttpDNS.refreshAsync(asyncDomainList)
+ val hostList = mutableListOf("HOST")
+// Set the domain name that needs to be pre-resolved.
+httpDns.setPreResolveHosts(hostList)
+
+// This method first queries the cache.
+// If there is an available resolution result in the cache, the resolution result is immediately returned through the callback.
+// If there is no available resolution result in the cache, the domain name resolution will be performed in the worker thread,
+// and the resolution result will be returned through the callback after the domain name resolution is completed or the timeout period is reached.
+httpDns.getDNSInfoAsync(hostList[0], object : DNSInfoCallback {
+
+    override fun onSuccess(info: DNSInfo) {
+        Log.i(TAG, "getDNSInfoAsync host:${hostList[0]} ipv4:${info.ipv4s} ipv6:${info.ipv6s}")
+    }
+
+    override fun onFailed(errMsg: String) {
+        Log.i(TAG, "getDNSInfoAsync failed, $errMsg")
+    }
+})
 
 Handler(Looper.myLooper()!!).postDelayed({
-    //If the request is successful, the IP address for the domain name can be obtained from the cache.
-    val ipList = HttpDNS.getIpListForDomain("asyncDomain1.com")
-    Log.i(TAG, "IP list of \"syncDomain1.com\"-> $ipList")
-}, 5000)
+    // This method only queries the cache and returns the resolution result in the cache, which may return an empty result.
+    // If there is no resolution result in the cache or the resolution result in the cache has expired,
+    // the domain name resolution will be performed in the worker thread.
+    // After the resolution is successful, the cache will be updated for the next call to domain name resolution.
+    val info = httpDns.getDNSInfoFromCache(hostList[0])
+    Log.i(TAG, "getDNSInfoFromCache host:${hostList[0]} info:$info")
+}, 4000)
 
 Thread {
-    // Synchronously obtain the IP address of the specified domain name list
-    val syncDomainList =
-        mutableListOf("asyncDomain3.com", "asyncDomain4.com")
-    val result = HttpDNS.refreshSync(syncDomainList)
-    if (result.isSuccess) {
-        //If the request is successful, the IP address for the domain name can be obtained from the cache.
-        val ipList = HttpDNS.getIpListForDomain("asyncDomain3.com")
-        Log.i(TAG, "IP list of \"syncDomain3.com\"-> $ipList")
-    } else {
-        Log.i(TAG, "IP list of \"syncDomain3.com\" error -> ${result.exceptionOrNull()}")
-    }
+    // This method first queries the cache.
+    // If there is an available resolution result in the cache, the resolution result is returned immediately.
+    // If there is no available resolution result in the cache, the thread currently calling the resolution will be blocked and the domain name resolution will be performed in the thread.
+    // The resolution result will be returned after the domain name resolution is completed, or an empty result will be returned after the timeout period is reached.
+    val info = httpDns.getDNSInfoSync(hostList[0])
+    Log.i(TAG, "getDNSInfoSync host:${hostList[0]} info:$info")
 }.start()
 ```
